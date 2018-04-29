@@ -5,7 +5,11 @@ Created on Wed Apr 25 15:13:45 2018
 @author: Jakub
 """
 import numpy as  np
+import numpy.linalg as LAG
 import tensorflow as tf
+from PIL import Image
+import matplotlib.pylab as plt
+import time
 
 tf.reset_default_graph()  
 
@@ -14,8 +18,10 @@ NGF=64 #number of generator filters in first convolutional layer
 NDF=64 #number of discriminator filters in first convolutional layer
 GAN_WEIGHT=1.0
 L1_WEIGHT=100.0
-LR=0.0002 #Learning rate for Adam
+LR=0.002 #Learning rate for Adam
 BETA1=0.5 #momentum term of Adam
+DROPOUT=0.0
+
 
 #implementation of leaky ReLU
 def lrelu(x, a):
@@ -77,9 +83,9 @@ def create_generator(generator_inputs, generator_outputs_channels):
             layers.append(output)
 
     layer_specs = [
-        (NGF * 8, 0.5),   # decoder_8: [batch, 1, 1, ngf * 8] => [batch, 2, 2, ngf * 8 * 2]
-        (NGF * 8, 0.5),   # decoder_7: [batch, 2, 2, ngf * 8 * 2] => [batch, 4, 4, ngf * 8 * 2]
-        (NGF * 8, 0.5),   # decoder_6: [batch, 4, 4, ngf * 8 * 2] => [batch, 8, 8, ngf * 8 * 2]
+        (NGF * 8, DROPOUT),   # decoder_8: [batch, 1, 1, ngf * 8] => [batch, 2, 2, ngf * 8 * 2]
+        (NGF * 8, DROPOUT),   # decoder_7: [batch, 2, 2, ngf * 8 * 2] => [batch, 4, 4, ngf * 8 * 2]
+        (NGF * 8, DROPOUT),   # decoder_6: [batch, 4, 4, ngf * 8 * 2] => [batch, 8, 8, ngf * 8 * 2]
         (NGF * 8, 0.0),   # decoder_5: [batch, 8, 8, ngf * 8 * 2] => [batch, 16, 16, ngf * 8 * 2]
         (NGF * 4, 0.0),   # decoder_4: [batch, 16, 16, ngf * 8 * 2] => [batch, 32, 32, ngf * 4 * 2]
         (NGF * 2, 0.0),   # decoder_3: [batch, 32, 32, ngf * 4 * 2] => [batch, 64, 64, ngf * 2 * 2]
@@ -209,15 +215,65 @@ input_batch=tf.placeholder(dtype=tf.float32, shape=[None, 256,256,3])
 target_batch=tf.placeholder(dtype=tf.float32, shape=[None, 256,256,3])
 gen_train, discrim_train,  outputs=create_model(input_batch, target_batch)
 
-with tf.Session() as sess:
-    sess.run(tf.global_variables_initializer())
-    
-    i=np.ones((2,256,256,3)) 
-    o=np.ones((2,256,256,3))
-    
-    x1=sess.run(outputs, feed_dict={input_batch: i})
-    for step in range(5):
-        print(step)
-        sess.run(gen_train, feed_dict={input_batch: i, target_batch: o})
-    x2=sess.run(outputs, feed_dict={input_batch: i})
 
+
+"""
+im = plt.imread("C:/Users/Jakub/pix2pix-tensorflow/facades/train/1.jpg")
+im=np.asarray(im, dtype=np.float32)
+im/=256
+
+im1=im[:,256:512,:]
+im2=im[:,0:256,:]
+
+
+batch1=np.zeros((1,256,256,3))
+batch2=np.zeros((1,256,256,3))
+batch1[0,:,:,:]=im1
+batch2[0,:,:,:]=im2
+"""
+
+batches=[]
+
+for i in range(1,1000):
+    if i%100==0:
+        print("Loading batch",i,"...")
+    BATCH_SIZE=1
+    batch_input=np.zeros((BATCH_SIZE,256,256,3), dtype=np.float32)
+    batch_target=np.zeros((BATCH_SIZE,256,256,3), dtype=np.float32)
+    #im = plt.imread("C:/Users/Jakub/pix2pix-tensorflow/facades/train/"+str(ind[BATCH_SIZE*i+j])+".jpg")
+    im=plt.imread("C:/Users/Jakub/pix2pix-tensorflow/edges2shoes/train/"+str(i)+"_AB.jpg")
+    im=np.asarray(im, dtype=np.float32)
+    im/=256
+    batch_input[0,:,:,:]= im[:,0:256,:]
+    batch_target[0,:,:,:]=im[:,256:512,:]
+    batches.append([batch_input,batch_target])
+        
+saver = tf.train.Saver()
+out=[]
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())   
+    for epoch in range(5):           
+        print("epoch",epoch)
+        b=1
+        for batch in batches: 
+            if b%10==0:
+                print("batch",b)
+            b+=1
+            if b%50==0:
+                time.sleep(15)
+            gen_train.run(feed_dict={input_batch: batch[0], target_batch: batch[1]})
+            discrim_train.run(feed_dict={input_batch: batch[0], target_batch: batch[1]})
+       
+        if epoch%1==0:
+            o=outputs.eval(feed_dict={input_batch: batches[0][0], target_batch: batches[0][1]})
+            out.append(o)
+            saver.save(sess, "C:/Users/Jakub/Desktop/fasadeGen/saved_models/shoes/model"+str(epoch)+".ckpt")    
+        time.sleep(30) #becouse my GPU is overheating
+
+"""
+o=out[4]
+o/=256
+o=np.asarray(o, dtype=np.uint8)
+img = Image.fromarray(o[0,:,:,:], 'RGB')
+img.show()
+"""
