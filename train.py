@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """
+Created on Thu May 10 15:53:18 2018
+
+@author: Jakub
+"""
+
+# -*- coding: utf-8 -*-
+"""
 Created on Thu May 10 14:42:15 2018
 
 @author: Jakub
@@ -34,8 +41,8 @@ DATA_TEST_DIR="C:/Users/Jakub/Desktop/DL_project/pizza_test"
 DATA_OUTPUT_DIR="C:/Users/Jakub/Desktop/DL_project/output"
 MODEL_DIR="C:/Users/Jakub/Desktop/DL_project/models"
 
-EXAMPLES_TRAIN=100
-EPOCHS=2
+EXAMPLES_TRAIN=100000
+EPOCHS=3
 SAVE_EACH=1
 TEST_EACH=1
 
@@ -300,9 +307,10 @@ with tf.Session() as sess:
         if epoch%SAVE_EACH==0:            
             saver.save(sess,MODEL_DIR+"/model"+str(epoch)+".ckpt") 
             
-        if epoch%SAVE_EACH==0:
+        if epoch%TEST_EACH==0:
             i=0
             for batch in batches_test:
+                print("Processing test image ",i)
                 ret=np.zeros((256,512,3))
                 o=outputs.eval(feed_dict={input_batch: batch[0]})
                 gt=np.copy(batch[0])
@@ -311,62 +319,8 @@ with tf.Session() as sess:
                 ret*=256
                 ret=np.asarray(ret, dtype=np.uint8)
                 img = Image.fromarray(ret, 'RGB')
-                img.save(DATA_OUTPUT_DIR+str(i)+'.jpg')
+                img.save(DATA_OUTPUT_DIR+"/"+str(i)+'.jpg')
                 i+=1
                 
 
 
-"""
-
-batches_test=[]
-
-for i in range(1000,1100):
-    if i%100==0:
-        print("Loading batch",i,"...")
-    BATCH_SIZE=1
-    batch_input=np.zeros((BATCH_SIZE,256,256,3), dtype=np.float32)
-    batch_target=np.zeros((BATCH_SIZE,256,256,3), dtype=np.float32)
-    #im = plt.imread("C:/Users/Jakub/pix2pix-tensorflow/facades/train/"+str(ind[BATCH_SIZE*i+j])+".jpg")
-    im=plt.imread("C:/Users/Jakub/pix2pix-tensorflow/edges2shoes/train/"+str(i)+"_AB.jpg")
-    im=np.asarray(im, dtype=np.float32)
-    im/=256
-    batch_input[0,:,:,:]= im[:,0:256,:]
-    batch_target[0,:,:,:]=im[:,256:512,:]
-    batches_test.append([batch_input,batch_target])
-
-
-out=[]
-with tf.Session() as sess:
-    sess.run(tf.global_variables_initializer()) 
-    saver.restore(sess, "C:/Users/Jakub/Desktop/fasadeGen/saved_models/shoes/model"+str(4)+".ckpt")        
-    b=1
-    for batch in batches_test: 
-        if b%10==0:
-            print("batch",b)
-        b+=1
-        if b%50==0:
-            time.sleep(15)        
-       
-        
-        o=outputs.eval(feed_dict={input_batch: batch[0]})
-        out.append(o)
-        
-           
-        
-
-
-"""
-
-"""
-OUTPUT_PATH="C:/Users/Jakub/Desktop/fasadeGen/res/"
-for i in range(100):
-    ret=np.zeros((256,512,3))
-    o=np.copy(out[i])
-    gt=np.copy(batches_test[i][0])
-    ret[:,0:256,:]=o
-    ret[:,256:512,:]=gt
-    ret*=256
-    ret=np.asarray(ret, dtype=np.uint8)
-    img = Image.fromarray(ret, 'RGB')
-    img.save(OUTPUT_PATH+str(i)+'.jpg')
-"""
