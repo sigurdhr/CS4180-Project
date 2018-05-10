@@ -1,21 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 Created on Thu May 10 15:53:18 2018
-
 @author: Jakub
 """
 
 # -*- coding: utf-8 -*-
 """
 Created on Thu May 10 14:42:15 2018
-
 @author: Jakub
 """
 
 # -*- coding: utf-8 -*-
 """
 Created on Wed Apr 25 15:13:45 2018
-
 @author: Jakub
 """
 import os
@@ -254,11 +251,8 @@ gen_train, discrim_train,  outputs=create_model(input_batch, target_batch)
 im = plt.imread("C:/Users/Jakub/pix2pix-tensorflow/facades/train/1.jpg")
 im=np.asarray(im, dtype=np.float32)
 im/=256
-
 im1=im[:,256:512,:]
 im2=im[:,0:256,:]
-
-
 batch1=np.zeros((1,256,256,3))
 batch2=np.zeros((1,256,256,3))
 batch1[0,:,:,:]=im1
@@ -303,23 +297,25 @@ saver = tf.train.Saver()
 with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())   
     for epoch in range(EPOCHS):           
-        print("epoch",epoch) 
+        print("Starting epoch",epoch) 
         b=0
         for batch in batches: 
-            print("batch:",b)
+            if b%100==0:
+                print("Epoch:",epoch,"batch:",b)
             b+=1
             
             gen_train.run(feed_dict={input_batch: batch[0], target_batch: batch[1]})
             discrim_train.run(feed_dict={input_batch: batch[0], target_batch: batch[1]})
             
        
-        if epoch%SAVE_EACH==0:            
+        if epoch%SAVE_EACH==0: 
+            print("saveing models...")
             saver.save(sess,MODEL_DIR+"/model"+str(epoch)+".ckpt") 
             
         if epoch%TEST_EACH==0:
             i=0
-            for batch in batches_test:
-                print("Processing test image ",i)
+            print("Processing test images... ")
+            for batch in batches_test:                
                 ret=np.zeros((256,512,3))
                 o=outputs.eval(feed_dict={input_batch: batch[0]})
                 gt=np.copy(batch[0])
@@ -328,8 +324,5 @@ with tf.Session() as sess:
                 ret*=256
                 ret=np.asarray(ret, dtype=np.uint8)
                 img = Image.fromarray(ret, 'RGB')
-                img.save(DATA_OUTPUT_DIR+"/"+str(i)+'.jpg')
+                img.save(DATA_OUTPUT_DIR+"/e"+str(epoch)+"_"+str(i)+'.jpg')
                 i+=1
-                
-
-
