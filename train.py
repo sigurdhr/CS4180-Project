@@ -36,10 +36,19 @@ L1_WEIGHT=100.0
 LR=0.002 #Learning rate for Adam
 BETA1=0.5 #momentum term of Adam
 DROPOUT=0.0
-DATA_TRAIN_DIR="C:/Users/Jakub/Desktop/DL_project/pizza_data"
-DATA_TEST_DIR="C:/Users/Jakub/Desktop/DL_project/pizza_test"
-DATA_OUTPUT_DIR="C:/Users/Jakub/Desktop/DL_project/output"
-MODEL_DIR="C:/Users/Jakub/Desktop/DL_project/models"
+
+SERVER_PATHS = True
+
+if SERVER_PATHS:
+    DATA_TRAIN_DIR  ="/home/shared/pizza/data/pizza_data" 
+    DATA_TEST_DIR   ="/home/shared/pizza/data/pizza_test"
+    DATA_OUTPUT_DIR ="/home/shared/pizza/output"
+    MODEL_DIR       ="/home/shared/pizza/models"
+else:
+    DATA_TRAIN_DIR  ="C:/Users/Jakub/Desktop/DL_project/pizza_data"
+    DATA_TEST_DIR   ="C:/Users/Jakub/Desktop/DL_project/pizza_test"
+    DATA_OUTPUT_DIR ="C:/Users/Jakub/Desktop/DL_project/output"
+    MODEL_DIR       ="C:/Users/Jakub/Desktop/DL_project/models"
 
 EXAMPLES_TRAIN=100000
 EPOCHS=3
