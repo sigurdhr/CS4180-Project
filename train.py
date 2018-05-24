@@ -30,9 +30,9 @@ NGF=64 #number of generator filters in first convolutional layer
 NDF=64 #number of discriminator filters in first convolutional layer
 GAN_WEIGHT=1.0
 L1_WEIGHT=100.0
-LR=0.002 #Learning rate for Adam
+LR=0.0002 #Learning rate for Adam
 BETA1=0.5 #momentum term of Adam
-DROPOUT=0.0
+DROPOUT=0.5
 
 SERVER_PATHS = True
 
