@@ -255,7 +255,7 @@ batch2[0,:,:,:]=im2
 batches=[]
 batches_test=[]
 loaded=0
-r=range(int(len(os.listdir(DATA_TRAIN_DIR))/BATCH_SIZE))
+r=list(range(int(len(os.listdir(DATA_TRAIN_DIR))/BATCH_SIZE)))
 random.shuffle(r)
 
 for i in r:   
