@@ -1,0 +1,320 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Jun 17 11:36:22 2018
+
+@author: Jakub
+"""
+
+from tkinter import *
+from tkinter import ttk
+import PIL.Image, PIL.ImageDraw
+from PIL import ImageTk,Image
+import numpy as np
+import cv2 as cv
+from PIL import ImageGrab
+import random
+import tensorflow as tf
+import os
+import time
+tf.reset_default_graph()  
+
+EPS = 1e-12 #epsilon, some very small number
+NGF=64 #number of generator filters in first convolutional layer
+NDF=64 #number of discriminator filters in first convolutional layer
+GAN_WEIGHT=1.0
+L1_WEIGHT=100.0
+LR=0.002 #Learning rate for Adam
+BETA1=0.5 #momentum term of Adam
+DROPOUT=0.0
+
+
+#implementation of leaky ReLU
+def lrelu(x, a):
+    with tf.name_scope("lrelu"):        
+        x = tf.identity(x)
+        return (0.5 * (1 + a)) * x + (0.5 * (1 - a)) * tf.abs(x)
+
+def batchnorm(inputs):
+    return tf.layers.batch_normalization(inputs, axis=3, epsilon=1e-5, momentum=0.1, training=True, gamma_initializer=tf.random_normal_initializer(1.0, 0.02))
+
+
+def discrim_conv(batch_input, out_channels, stride):
+    padded_input = tf.pad(batch_input, [[0, 0], [1, 1], [1, 1], [0, 0]], mode="CONSTANT")
+    return tf.layers.conv2d(padded_input, out_channels, kernel_size=4, strides=(stride, stride), padding="valid", kernel_initializer=tf.random_normal_initializer(0, 0.02))
+
+def gen_conv(batch_input, out_channels, separable_conv=False):
+    # [batch, in_height, in_width, in_channels] => [batch, out_height, out_width, out_channels]
+    initializer = tf.random_normal_initializer(0, 0.02)
+    if separable_conv:
+        return tf.layers.separable_conv2d(batch_input, out_channels, kernel_size=4, strides=(2, 2), padding="same", depthwise_initializer=initializer, pointwise_initializer=initializer)
+    else:
+        return tf.layers.conv2d(batch_input, out_channels, kernel_size=4, strides=(2, 2), padding="same", kernel_initializer=initializer)
+
+
+def gen_deconv(batch_input, out_channels, separable_conv=False):
+    # [batch, in_height, in_width, in_channels] => [batch, out_height, out_width, out_channels]
+    initializer = tf.random_normal_initializer(0, 0.02)
+    if separable_conv:
+        _b, h, w, _c = batch_input.shape
+        resized_input = tf.image.resize_images(batch_input, [h * 2, w * 2], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        return tf.layers.separable_conv2d(resized_input, out_channels, kernel_size=4, strides=(1, 1), padding="same", depthwise_initializer=initializer, pointwise_initializer=initializer)
+    else:
+        return tf.layers.conv2d_transpose(batch_input, out_channels, kernel_size=4, strides=(2, 2), padding="same", kernel_initializer=initializer)
+    
+def create_generator(generator_inputs, generator_outputs_channels):
+    layers = []
+
+    # encoder_1: [batch, 256, 256, in_channels] => [batch, 128, 128, ngf]
+    with tf.variable_scope("encoder_1"):
+        output = gen_conv(generator_inputs, NGF)
+        layers.append(output)
+
+    layer_specs = [
+        NGF * 2, # encoder_2: [batch, 128, 128, ngf] => [batch, 64, 64, ngf * 2]
+        NGF * 4, # encoder_3: [batch, 64, 64, ngf * 2] => [batch, 32, 32, ngf * 4]
+        NGF * 8, # encoder_4: [batch, 32, 32, ngf * 4] => [batch, 16, 16, ngf * 8]
+        NGF * 8, # encoder_5: [batch, 16, 16, ngf * 8] => [batch, 8, 8, ngf * 8]
+        NGF * 8, # encoder_6: [batch, 8, 8, ngf * 8] => [batch, 4, 4, ngf * 8]
+        NGF * 8, # encoder_7: [batch, 4, 4, ngf * 8] => [batch, 2, 2, ngf * 8]
+        NGF * 8, # encoder_8: [batch, 2, 2, ngf * 8] => [batch, 1, 1, ngf * 8]
+    ]
+
+    for out_channels in layer_specs:
+        with tf.variable_scope("encoder_%d" % (len(layers) + 1)):
+            rectified = lrelu(layers[-1], 0.2)
+            # [batch, in_height, in_width, in_channels] => [batch, in_height/2, in_width/2, out_channels]
+            convolved = gen_conv(rectified, out_channels)
+            output = batchnorm(convolved)
+            layers.append(output)
+
+    layer_specs = [
+        (NGF * 8, DROPOUT),   # decoder_8: [batch, 1, 1, ngf * 8] => [batch, 2, 2, ngf * 8 * 2]
+        (NGF * 8, DROPOUT),   # decoder_7: [batch, 2, 2, ngf * 8 * 2] => [batch, 4, 4, ngf * 8 * 2]
+        (NGF * 8, DROPOUT),   # decoder_6: [batch, 4, 4, ngf * 8 * 2] => [batch, 8, 8, ngf * 8 * 2]
+        (NGF * 8, 0.0),   # decoder_5: [batch, 8, 8, ngf * 8 * 2] => [batch, 16, 16, ngf * 8 * 2]
+        (NGF * 4, 0.0),   # decoder_4: [batch, 16, 16, ngf * 8 * 2] => [batch, 32, 32, ngf * 4 * 2]
+        (NGF * 2, 0.0),   # decoder_3: [batch, 32, 32, ngf * 4 * 2] => [batch, 64, 64, ngf * 2 * 2]
+        (NGF, 0.0),       # decoder_2: [batch, 64, 64, ngf * 2 * 2] => [batch, 128, 128, ngf * 2]
+    ]
+
+    num_encoder_layers = len(layers)
+    for decoder_layer, (out_channels, dropout) in enumerate(layer_specs):
+        skip_layer = num_encoder_layers - decoder_layer - 1
+        with tf.variable_scope("decoder_%d" % (skip_layer + 1)):
+            if decoder_layer == 0:
+                # first decoder layer doesn't have skip connections
+                # since it is directly connected to the skip_layer
+                input = layers[-1]
+            else:
+                input = tf.concat([layers[-1], layers[skip_layer]], axis=3)
+
+            rectified = tf.nn.relu(input)
+            # [batch, in_height, in_width, in_channels] => [batch, in_height*2, in_width*2, out_channels]
+            output = gen_deconv(rectified, out_channels)
+            output = batchnorm(output)
+
+            if dropout > 0.0:
+                output = tf.nn.dropout(output, keep_prob=1 - dropout)
+
+            layers.append(output)
+
+    # decoder_1: [batch, 128, 128, ngf * 2] => [batch, 256, 256, generator_outputs_channels]
+    with tf.variable_scope("decoder_1"):
+        input = tf.concat([layers[-1], layers[0]], axis=3)
+        rectified = tf.nn.relu(input)
+        output = gen_deconv(rectified, generator_outputs_channels)
+        output = tf.tanh(output)
+        layers.append(output)
+
+    return layers[-1]
+
+
+def create_discriminator(discrim_inputs, discrim_targets):
+        n_layers = 3
+        layers = []
+
+        # 2x [batch, height, width, in_channels] => [batch, height, width, in_channels * 2]
+        input = tf.concat([discrim_inputs, discrim_targets], axis=3)
+
+        # layer_1: [batch, 256, 256, in_channels * 2] => [batch, 128, 128, ndf]
+        with tf.variable_scope("layer_1"):
+            convolved = discrim_conv(input, NDF, stride=2)
+            rectified = lrelu(convolved, 0.2)
+            layers.append(rectified)
+
+        # layer_2: [batch, 128, 128, ndf] => [batch, 64, 64, ndf * 2]
+        # layer_3: [batch, 64, 64, ndf * 2] => [batch, 32, 32, ndf * 4]
+        # layer_4: [batch, 32, 32, ndf * 4] => [batch, 31, 31, ndf * 8]
+        for i in range(n_layers):
+            with tf.variable_scope("layer_%d" % (len(layers) + 1)):
+                out_channels = NDF * min(2**(i+1), 8)
+                stride = 1 if i == n_layers - 1 else 2  # last layer here has stride 1
+                convolved = discrim_conv(layers[-1], out_channels, stride=stride)
+                normalized = batchnorm(convolved)
+                rectified = lrelu(normalized, 0.2)
+                layers.append(rectified)
+
+        # layer_5: [batch, 31, 31, ndf * 8] => [batch, 30, 30, 1]
+        with tf.variable_scope("layer_%d" % (len(layers) + 1)):
+            convolved = discrim_conv(rectified, out_channels=1, stride=1)
+            output = tf.sigmoid(convolved)
+            layers.append(output)
+
+        return layers[-1]
+
+
+#inputs - batch of edges images
+#targets - batch of ground truth output images
+def create_model(inputs, targets):
+    with tf.variable_scope("generator"):
+        out_channels = int(targets.get_shape()[-1])
+        outputs = create_generator(inputs, out_channels)
+
+    # create two copies of discriminator, one for real pairs and one for fake pairs
+    # they share the same underlying variables
+    with tf.name_scope("real_discriminator"):
+        with tf.variable_scope("discriminator"):
+            # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
+            predict_real = create_discriminator(inputs, targets)
+
+    with tf.name_scope("fake_discriminator"):
+        with tf.variable_scope("discriminator", reuse=True):
+            # 2x [batch, height, width, channels] => [batch, 30, 30, 1]
+            predict_fake = create_discriminator(inputs, outputs)
+
+    with tf.name_scope("discriminator_loss"):
+        # minimizing -tf.log will try to get inputs to 1
+        # predict_real => 1
+        # predict_fake => 0
+        discrim_loss = tf.reduce_mean(-(tf.log(predict_real + EPS) + tf.log(1 - predict_fake + EPS)))
+
+    with tf.name_scope("generator_loss"):
+        # predict_fake => 1
+        # abs(targets - outputs) => 0
+        gen_loss_GAN = tf.reduce_mean(-tf.log(predict_fake + EPS))
+        gen_loss_L1 = tf.reduce_mean(tf.abs(targets - outputs))
+        gen_loss = gen_loss_GAN * GAN_WEIGHT + gen_loss_L1 * L1_WEIGHT
+
+    with tf.name_scope("discriminator_train"):
+        discrim_tvars = [var for var in tf.trainable_variables() if var.name.startswith("discriminator")]
+        discrim_optim = tf.train.AdamOptimizer(LR, BETA1)
+        discrim_grads_and_vars = discrim_optim.compute_gradients(discrim_loss, var_list=discrim_tvars)
+        discrim_train = discrim_optim.apply_gradients(discrim_grads_and_vars)
+
+    with tf.name_scope("generator_train"):
+        with tf.control_dependencies([discrim_train]):
+            gen_tvars = [var for var in tf.trainable_variables() if var.name.startswith("generator")]
+            gen_optim = tf.train.AdamOptimizer(LR, BETA1)
+            gen_grads_and_vars = gen_optim.compute_gradients(gen_loss, var_list=gen_tvars)
+            gen_train = gen_optim.apply_gradients(gen_grads_and_vars)
+
+    ema = tf.train.ExponentialMovingAverage(decay=0.99)
+    update_losses = ema.apply([discrim_loss, gen_loss_GAN, gen_loss_L1])
+
+    global_step = tf.train.get_or_create_global_step()
+    incr_global_step = tf.assign(global_step, global_step+1)
+
+    return gen_train, discrim_train, outputs
+
+input_batch=tf.placeholder(dtype=tf.float32, shape=[None, 256,256,3])
+target_batch=tf.placeholder(dtype=tf.float32, shape=[None, 256,256,3])
+#gen_train, discrim_train,  outputs=create_model(input_batch, target_batch)
+gen_train, discrim_train,  outputs=create_model(input_batch, target_batch)
+sess=tf.Session()
+sess.run(tf.global_variables_initializer())   
+saver = tf.train.Saver()      
+saver.restore(sess, "model_4_canny.ckpt")
+
+
+
+def predict(x):    
+    #gen_train, discrim_train,  outputs=create_model(input_batch, target_batch)
+    batch_input=np.zeros((1,256,256,3), dtype=np.float32)
+    x/=256   
+    batch_input[0,:,:,:]= x   
+    o=outputs.eval(feed_dict={input_batch: batch_input}, session=sess)
+    o*=256
+    ret=np.asarray(o[0,:,:,:], dtype=np.uint8)
+    img = Image.fromarray(ret, 'RGB')    
+    img.save("output_image.jpg")
+
+
+def bakeit():
+    widget=canvas1
+    x=root.winfo_rootx()+widget.winfo_x()
+    y=root.winfo_rooty()+widget.winfo_y()
+    x1=x+widget.winfo_width()
+    y1=y+widget.winfo_height()
+    #im=ImageGrab.grab().crop((x,y,x1,y1)).save("draw.jpg")
+    im=ImageGrab.grab().crop((x,y,x1,y1))
+    im=np.asarray(im, dtype=np.float32)
+    im=cv.resize(im, (256,256), 0, 0, interpolation=cv.INTER_CUBIC)
+    global img
+    img=predict(im)
+    global photo
+    global cv_img
+    cv_img = cv.cvtColor(cv.imread("output_image.jpg"), cv.COLOR_BGR2RGB)
+    cv_img=cv.resize(cv_img, (512,512), 0, 0, interpolation=cv.INTER_CUBIC)
+    photo = PIL.ImageTk.PhotoImage(image = PIL.Image.fromarray(cv_img))
+    
+    canvas2.create_image(0, 0, image=photo, anchor=tkinter.NW)
+    
+ 
+def erase():
+    canvas1.delete("all")
+  
+def randomExample():
+    i=random.randint(1,9)
+    global edges    
+    im = cv.cvtColor(cv.imread("example"+str(i)+".jpg"), cv.COLOR_BGR2RGB)
+    edges=im[:,256:512,:]
+    edges=cv.resize(edges, (512,512), 0, 0, interpolation=cv.INTER_CUBIC)
+    edges = PIL.ImageTk.PhotoImage(image = PIL.Image.fromarray(edges))
+    canvas1.create_image(0, 0, image=edges, anchor=tkinter.NW)
+    global photo
+    photo=im[:,0:256,:]
+    photo=cv.resize(photo, (512,512), 0, 0, interpolation=cv.INTER_CUBIC)
+    photo = PIL.ImageTk.PhotoImage(image = PIL.Image.fromarray(photo))
+    canvas2.create_image(0, 0, image=photo, anchor=tkinter.NW)
+    
+
+
+ 
+root = Tk()
+root.title("Edges2Pizza")    
+mainframe = ttk.Frame(root, padding="3 3 12 12")
+mainframe.grid(column=0, row=0, sticky=(N, W, E, S))
+mainframe.columnconfigure(0, weight=1)
+mainframe.rowconfigure(0, weight=1)
+
+#ttk.Label(mainframe, textvariable=meters).grid(column=2, row=2, sticky=(W, E))
+button=ttk.Button(mainframe, text="Bake it!", command=bakeit, width=25).grid(column=2, row=1)
+
+button2=ttk.Button(mainframe, text="Erase", command=erase, width=25).grid(column=1, row=2, sticky=E)
+
+button3=ttk.Button(mainframe, text="Random example", command=randomExample, width=25).grid(column=1, row=2, sticky=W)
+
+canvas1 = Canvas(mainframe, width=508, height=508,bg='white' )
+canvas1.grid(column=1, row=1, sticky=W)
+
+canvas2 = Canvas(mainframe, width=512, height=512,bg='grey' )
+canvas2.grid(column=3, row=1, sticky=W)
+
+lastx, lasty = 0, 0
+
+def xy(event):
+    global lastx, lasty
+    lastx, lasty = event.x, event.y
+
+def addLine(event):
+    global lastx, lasty
+    canvas1.create_line((lastx, lasty, event.x, event.y))
+    lastx, lasty = event.x, event.y
+    
+canvas1.bind("<Button-1>", xy)
+canvas1.bind("<B1-Motion>", addLine)
+
+for child in mainframe.winfo_children(): child.grid_configure(padx=5, pady=5)
+
+root.bind('<Return>', bakeit)
+root.mainloop()  
